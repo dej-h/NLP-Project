@@ -62,7 +62,7 @@ def get_all_synonyms(dat_file, word, idx_data):
 
 # Load SpaCy's Dutch language model for word categorization
 import spacy
-nlp = spacy.load("nl_core_news_sm", disable=["ner", "parser"])  # Disable unnecessary pipeline components
+nlp = spacy.load("nl_core_news_lg") # , disable=["ner", "parser"] # Disable unnecessary pipeline components
 
 # Logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -316,7 +316,100 @@ def reset_processed_and_synonyms(db_path):
     
     finally:
         conn.close()
+
+def sync_words_and_synonyms(db_path):
+    """
+    Synchronize the synonym and word database by adding all synonyms that are not present in the 'words' table.
+    Categorize the new words using SpaCy.
+    
+    :param db_path: Path to the SQLite database.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Fetch all synonyms
+    cursor.execute('SELECT DISTINCT synonym FROM synonyms')
+    synonyms = [row[0] for row in cursor.fetchall()]
+    
+    # Fetch all words
+    cursor.execute('SELECT word FROM words')
+    words = {row[0] for row in cursor.fetchall()}  # Set for faster lookup
+    
+    # Find synonyms not in words
+    new_synonyms = [synonym for synonym in synonyms if synonym not in words]
+    
+    if new_synonyms:
+        print("Found:", len(new_synonyms), "new synonyms.")
         
+        # Categorize the new words
+        categorized_words = categorize_words_in_batch(new_synonyms)
+        
+        # Insert new words into the 'words' table, skipping duplicates
+        for word, word_type in categorized_words:
+            try:
+                cursor.execute('''
+                    INSERT INTO words (word, word_type, simplicity_score, processed)
+                    VALUES (?, ?, 0.0, 1)
+                ''', (word, word_type))
+            except sqlite3.IntegrityError:
+                # If word already exists, just skip it
+                print(f"Skipping duplicate word: {word}")
+                
+    else:
+        print("No new synonyms found.")
+    
+    # Commit changes and close the connection
+    conn.commit()
+    conn.close()
+    
+    
+def recategorize_words(db_path):
+    """
+    Recategorize all words in the 'words' table using SpaCy and update their word_type in the database.
+    Display a progress bar to show processing progress.
+    
+    :param db_path: Path to the SQLite database.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Fetch all words from the 'words' table
+    cursor.execute('SELECT word FROM words')
+    words = [row[0] for row in cursor.fetchall()]
+    total_words = len(words)
+    
+    if total_words > 0:
+        print(f"Found {total_words} words to recategorize.")
+        
+        # Start time for progress estimation
+        start_time = time.time()
+        total_processed = 0
+        
+        # Categorize words in batch
+        categorized_words = categorize_words_in_batch(words)
+        
+        # Update word_type for each word in the database and display progress
+        for word, word_type in categorized_words:
+            cursor.execute('''
+                UPDATE words
+                SET word_type = ?
+                WHERE word = ?
+            ''', (word_type, word))
+            
+            # Update progress bar
+            total_processed += 1
+            display_progress_bar(total_processed, total_words, start_time)
+        
+        print("\nRecategorization complete.")
+    else:
+        print("No words found for recategorization.")
+    
+    # Commit changes and close the connection
+    conn.commit()
+    conn.close()
+    
+    
+      
 def main():
     """
     Main function to initialize the database and process the words to extract and store their synonyms.
@@ -326,8 +419,8 @@ def main():
     idx_file = 'sym_database/th_nl_v2.idx'
     dat_file = 'sym_database/th_nl_v2.dat'
     #initialize_database(db_path, dictionary_file, no_uppercase=True, no_special_characters=True)
-    process_synonyms(db_path, idx_file, dat_file)
-    
+    #process_synonyms(db_path, idx_file, dat_file)
+    #recategorize_words(db_path)
 
 
 if __name__ == "__main__":
