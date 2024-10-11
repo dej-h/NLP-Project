@@ -92,6 +92,13 @@ def initialize_database(db_path, dictionary_file, no_uppercase=False, no_special
     :param no_special_characters: Flag to exclude words with special characters.
     :param allowed_special_chars: Special characters that are allowed in words.
     """
+    
+    # print if you are sure you want to redo the database
+    print("Are you sure you want to initialize the database? This will clear all existing data.")
+    response = input("Enter 'yes' to confirm: ")
+    if response.lower() != 'yes':
+        print("Initialization aborted.")
+        return
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
@@ -296,6 +303,13 @@ def reset_processed_and_synonyms(db_path):
     
     :param db_path: Path to the SQLite database
     """
+    # ask user if sure
+    print("Are you sure you want to reset the database? This will clear all synonyms and reset the 'processed' flags.")
+    response = input("Enter 'yes' to confirm: ")
+    if response.lower() != 'yes':
+        print("Reset operation aborted.")
+        return
+    
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
