@@ -1,4 +1,5 @@
 const express = require('express');
+const { spawn } = require('child_process'); // To execute Python script
 const app = express();
 const port = 3000;
 
@@ -11,15 +12,29 @@ app.post('/extract', (req, res) => {
 
   console.log("Received text from Chrome extension:", text);
 
-  // Simulated response with complex words and their synonyms (as described)
-  const simulatedResponse = [
-    "3|0.8|simple,easy|0.2,0.1|0.4,0.5",     // Replace word at position 3
-    "8|0.7|basic,elementary|0.3,0.4|0.2,0.3", // Replace word at position 8
-    "NONE" // If no synonyms are found for a certain position
-  ];
+  // Call Python script
+  const pythonProcess = spawn('python', ['./NLP-project/Test_backend/getSynonymsDB.py', text]);
 
-  // Send the simulated response back to the Chrome extension
-  res.json({ replacements: simulatedResponse });
+  let dataToSend = '';
+
+  // Collect data from Python script
+  pythonProcess.stdout.on('data', (data) => {
+    dataToSend += data.toString();
+  });
+
+  pythonProcess.stderr.on('data', (data) => {
+    console.error(`Error: ${data}`);
+  });
+
+  // When the Python process finishes, send the result back
+  pythonProcess.on('close', (code) => {
+    if (code === 0) {
+      // Send the response back to the Chrome extension
+      res.json({ replacements: dataToSend.split(';') });
+    } else {
+      res.status(500).send('Error executing Python script');
+    }
+  });
 });
 
 // Start the server

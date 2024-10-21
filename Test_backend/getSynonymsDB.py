@@ -1,6 +1,7 @@
 import sqlite3
 import re
-import spacy
+#import spacy
+import sys
 def open_database(db_path):
     """
     Open a connection to the SQLite database.
@@ -96,6 +97,9 @@ def extract_word_scores_and_synonyms(text, debug=False):
     # Return the result in the required format, separated by semicolons
     return ";".join(result)
 
+
+"""
+#test scenario
 # Load the large Dutch language model
 nlp = spacy.load("nl_core_news_lg")
 
@@ -115,3 +119,20 @@ lemmatized_text = " ".join(lemmatized_words)
 response_lemmatized = extract_word_scores_and_synonyms(lemmatized_text, debug=True)
 for i in response_lemmatized.split(";"):
     print(i)
+
+"""
+
+
+def main(text):
+    # Call your existing function to process the text and get the response
+    response = extract_word_scores_and_synonyms(text, debug=False)
+
+    # Print the result to send it back to Node.js (print acts like a return in this context)
+    print(response)
+
+if __name__ == "__main__":
+    # Get the text from command-line argument
+    text = sys.argv[1]
+    
+    # Run the main function with the provided text
+    main(text)
