@@ -39,7 +39,7 @@ def close_database(conn):
     
 def extract_word_scores_and_synonyms(text, debug=False):
     # Open database connection
-    db_path = 'dutch_synonyms.db'
+    db_path = 'dutch_synonyms_NN.db'
     conn, cursor = open_database(db_path)
 
     # Tokenize the text into words, preserving word positions
