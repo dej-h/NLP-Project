@@ -1,0 +1,12 @@
+torch==1.13.0  # Update PyTorch to 1.8.0 for compatibility
+pytorch-lightning
+scikit-learn
+scipy
+tabulate
+tokenizers==0.9.4
+tqdm
+transformers==4.0
+wandb
+matplotlib
+editdistance
+sacremoses
