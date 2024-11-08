@@ -3,9 +3,9 @@ import re
 import spacy
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForSequenceClassification
 import torch
-
+import time
 from sentence_transformers import SentenceTransformer, util
-
+start_time = time.time()
 # Load multilingual SimCSE model
 simcse_model = SentenceTransformer("paraphrase-xlm-r-multilingual-v1")
 # Load SpaCy Dutch language model for lemmatization
@@ -176,7 +176,11 @@ def generate_candidates(sentence, word_to_replace, cursor, position, debug=False
             if debug:
                 print(f"Filtering out '{candidate}': same as original word.")
             continue
-        
+        # check if the candidate is a contains the original word ( prevent a compound word to be replaced by one of its components)
+        if word_to_replace in candidate:
+            if debug:
+                print(f"Filtering out '{candidate}': contains original word.")
+            continue
         candidate_sentence = sentence.replace(word_to_replace, candidate)
         lemmatized_candidate = lemmatize_in_context(candidate_sentence, candidate)
 
@@ -203,7 +207,10 @@ def generate_candidates(sentence, word_to_replace, cursor, position, debug=False
             continue
 
         similarity_score = check_simcse_similarity(sentence, candidate_sentence)
-        formatted_candidate = f"{word_to_replace}|{position}|{complex_simplicity_score}|{candidate}|{candidate_simplicity_score}|{similarity_score}"
+        if debug:
+            formatted_candidate = f"{word_to_replace}|{position}|{complex_simplicity_score}|{candidate}|{candidate_simplicity_score}|{similarity_score}"
+        else:
+            formatted_candidate = f"{position}|{complex_simplicity_score}|{candidate}|{candidate_simplicity_score}|{similarity_score}"
         formatted_candidates.append(formatted_candidate)
         
         if debug:
@@ -220,7 +227,7 @@ def suggest_replacements(text, db_path='dutch_synonyms_NN.db', debug=False, max_
     current_segment = []
     current_length = 0
 
-    words = text.split()
+    words = re.findall(r'\w+', text.lower())
     for word in words:
         token_length = len(tokenizer(word)['input_ids'])
         if current_length + token_length > max_tokens:
@@ -271,12 +278,121 @@ def suggest_replacements(text, db_path='dutch_synonyms_NN.db', debug=False, max_
     
     return combined_db_suggestions, combined_model_suggestions
 
+def fill_in_replacements(model_suggestions, db_suggestions, text, debug=False):
+    simplicity_weight = 0.5
+    relatedness_weight = 0.5
+    
+    # Input data format (no debug): position|simplicity_score|synonym|synonym_simplicity_score|relatedness_score
+    # Input data format (debug): word|position|simplicity_score|synonym|synonym_simplicity_score|relatedness_score
 
+    # Parse the suggestions into lists of tuples, keeping all entries
+    db_entries = []
+    for suggestion in db_suggestions.split(";"):
+        if suggestion:
+            parts = suggestion.split("|")
+            position = int(parts[1]) if debug else int(parts[0])
+            entry = parts[2:] if debug else parts[1:]
+            db_entries.append((position, entry))
+    
+    model_entries = []
+    for suggestion in model_suggestions.split(";"):
+        if suggestion:
+            parts = suggestion.split("|")
+            position = int(parts[1]) if debug else int(parts[0])
+            entry = parts[2:] if debug else parts[1:]
+            model_entries.append((position, entry))
+
+    lines = text.splitlines()
+    result_lines = []
+
+    word_counter = 0  # A counter to keep track of word positions across lines
+
+    for line in lines:
+        result_tokens = re.findall(r'\w+|[^\w\s]', line)  # Tokenize line with punctuation preservation
+        line_word_counter = 0  # A counter for words within this line
+
+        for i, token in enumerate(result_tokens):
+            if not re.match(r'\w+', token):  # Check if token is not a word (punctuation or whitespace)
+                continue
+
+            # Collect all DB and model replacements for the current word position
+            db_replacements = [entry for pos, entry in db_entries if pos == word_counter]
+            model_replacements = [entry for pos, entry in model_entries if pos == word_counter]
+            
+            # Find the best DB replacement based on simplicity score
+            best_db_replacement = None
+            best_db_simplicity_score = float('inf')
+            
+            for replacement in db_replacements:
+                if replacement[2] != "NONE" and float(replacement[0]) < float(replacement[2]):
+                    synonym_simplicity_score = float(replacement[2])
+                    if synonym_simplicity_score < best_db_simplicity_score:
+                        best_db_simplicity_score = synonym_simplicity_score
+                        best_db_replacement = replacement[1]  # synonym
+
+            # If a DB replacement is found, apply it and skip to the next word
+            if best_db_replacement:
+                print(f"Putting the word: {best_db_replacement} in place of {token} at position {word_counter} (DB)")
+                result_tokens[i] = (
+                    best_db_replacement.capitalize() if token[0].isupper() else best_db_replacement
+                )
+                word_counter += 1  # Increase word count since we handled a word
+                line_word_counter += 1
+                continue
+
+            # If no DB replacement is used, find the best model replacement
+            best_model_replacement = None
+            best_model_score = float('-inf')
+            
+            for replacement in model_replacements:
+                if replacement[2] != "NONE" and float(replacement[0]) < float(replacement[2]):
+                    simplicity_score = float(replacement[0])
+                    relatedness_score = float(replacement[2])
+                    score = simplicity_score * relatedness_score  # Combined score for model suggestions
+                    if score > best_model_score:
+                        best_model_score = score
+                        best_model_replacement = replacement[1]  # synonym
+
+            # Apply the best model replacement if it exists
+            if best_model_replacement:
+                print(f"Putting the word: {best_model_replacement} in place of {token} at position {word_counter} (Model)")
+                result_tokens[i] = (
+                    best_model_replacement.capitalize() if token[0].isupper() else best_model_replacement
+                )
+
+            # Increase word count only after processing a word token
+            word_counter += 1
+            line_word_counter += 1
+
+        # Reconstruct line and add it to result lines
+        result_line = ' '.join(result_tokens).replace(' .', '.').replace(' ,', ',')
+        result_lines.append(result_line)
+
+    # Join the result lines back into a single text, preserving line breaks
+    return '\n'.join(result_lines)
+
+
+
+        
+    
+    
+    
+ 
 # Example usage
 text = "In Nederland is het niet verboden om een product onder de inkoopprijs te verkopen. Vooral supermarkten verkopen soms hun producten onder de inkoopprijs. Zo hebben zij een voordeel op hun concurrenten. Dat is gunstig voor de consument. De overheid wil verkoop beneden de inkoopprijs niet verbieden. De verwachting is namelijk dat een dergelijk verbod geen effect heeft op de positie van kleinere kruideniers of van leveranciers (boeren en tuinders).\n\nHet energielabel geeft aan hoe goed een woning is geïsoleerd (zogenoemde isolatieniveau). En hoe dak, vloeren en ramen van een woning optimaal geïsoleerd kunnen worden (zogenoemde streefwaarden). Bij een oude woning liggen de streefwaarden lager dan bij een nieuwe woning. Als een dak, vloer of raam optimaal is geïsoleerd, vermeldt het energielabel dat het voldoet aan de standaard voor woningisolatie.\n\nIs het tarief van de kinderopvang hoger dan de maximale vergoeding? Dan betalen de ouders het bedrag boven de maximale uurprijs zelf. Is het tarief van de kinderopvang lager dan de maximumprijs per uur? Dan krijgen ouders over dat goedkopere uurtarief kinderopvangtoeslag.\n\nHeeft u van de politie een bekeuring ontvangen voor het niet voldoen aan de identificatieplicht? Dan kunt u hiertegen geen bezwaar maken. Van het Centraal Justitieel Incassobureau (CJIB) ontvangt u een acceptgiro om de boete te betalen. Betaalt u de boete niet, dan beslist de officier van Justitie of u strafrechtelijk wordt vervolgd. Dit kan nog tot 2 jaar na de datum van de overtreding.\n\nBij een ramp kunnen mensen en bedrijven materiële schade lijden. Het kabinet kan gedupeerden dan helpen met de Wet tegemoetkoming schade bij rampen (Wts). Dankzij de Wts kunnen gedupeerden onder voorwaarden, een financiële tegemoetkoming krijgen voor de geleden schade en kosten. Het gaat daarbij alleen om schade die niet verhaalbaar, niet vermijdbaar en niet redelijkerwijs verzekerbaar is.\n\nVogelgriep verspreidt zich in Nederland door bijvoorbeeld trekvogels. Dit heeft grote gevolgen voor de natuur en pluimveebedrijven. De Rijksoverheid neemt bij verdenking van vogelgriep maatregelen om verspreiding tegen te gaan. Ook is er een plan om besmetting met het virus zo veel mogelijk te voorkomen.\n\nDe mensen in het gaswinningsgebied willen dat de overheid voorrang geeft aan het verbeteren van de schadeafhandeling. En de versterking van onveilige huizen zo snel mogelijk afrondt. 29 van de 50 maatregelen die de overheid neemt, zijn bedoeld om dit voor elkaar te krijgen.\n\nGemeenten hebben per 1 februari 2024 met de Wet gemeentelijke taak mogelijk maken asielopvangvoorzieningen (Spreidingswet) een wettelijke taak in de opvang van asielzoekers. Het doel van de wet is te komen tot voldoende opvangplekken en een evenwichtiger verdeling van asielzoekers over provincies en gemeenten.\n\nOm terug te keren naar het land van herkomst heeft de vreemdeling een geldig reisdocument nodig, zoals een paspoort. Het komt voor dat vreemdelingen geen geldig reisdocument hebben. Het land van herkomst moet de vreemdeling dan identificeren. Daarnaast regelt het land van herkomst van de vreemdeling een (vervangend) reisdocument, zoals een noodreisdocument (een laissez-passer).\n\nDe basisschool bewaart verschillende gegevens over uw kind in een leerlingdossier, zoals de leerresultaten. U en de school mogen deze gegevens inzien. In speciale gevallen mogen anderen dat ook, zoals in een noodsituatie of bij een vermoeden van kindermishandeling."
+debug = True
+db_suggestions, model_suggestions = suggest_replacements(text, debug=debug)
+reformed_text = fill_in_replacements(model_suggestions, db_suggestions, text, debug=debug)
 
-db_suggestions, model_suggestions = suggest_replacements(text, debug=True)
-#print dutch stop words
+print("Original text:")
+print(text)
+print("\nReformed text:")
+print(reformed_text)
+
+print(f"Execution time: {time.time() - start_time:.2f} seconds")
+## print all the stopwords
+#print(stopwords)
+
 
 # print the words types of the whole sentence
 # doc = nlp(text)
